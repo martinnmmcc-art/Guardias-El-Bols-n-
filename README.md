@@ -37,3 +37,4 @@ cambiar las políticas para que se basen en el usuario logueado.
 
 Ya está desplegado en Vercel. Cada `git push` a la rama principal (una vez
 conectado el repo) genera un deploy nuevo automáticamente.
+
