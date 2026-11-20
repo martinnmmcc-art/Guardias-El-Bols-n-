@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from './supabaseClient';
+import html2canvas from 'html2canvas';
 
 /* ============================================================
    GUARDIAS EL BOLSÓN — EDERSA
@@ -409,6 +410,7 @@ export default function App() {
           ["extra", "Horas Extra"],
           ["coberturas", "Coberturas"],
           ["banco", "Banco de Hs"],
+          ["liquidacion", "Liquidación"],
           ["config", "Config"],
         ].map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)}
@@ -444,6 +446,9 @@ export default function App() {
           <BancoTab resumenPorPersonaMes={resumenPorPersonaMes} bancoTotalPorPersona={bancoTotalPorPersona}
             empleados={empleados} currentUser={currentUser} addBancoUso={addBancoUso} bancoUso={bancoUso}
             removeBancoUso={removeBancoUso} updateEmpleado={updateEmpleado} />
+        )}
+        {tab === "liquidacion" && (
+          <LiquidacionTab horasExtra={horasExtra} empleados={empleados} />
         )}
         {tab === "config" && (
           <ConfigTab empleados={empleados} updateEmpleado={updateEmpleado} />
@@ -1366,6 +1371,161 @@ function BancoTab({ resumenPorPersonaMes, bancoTotalPorPersona, empleados, curre
 /* ============================================================
    CONFIG
    ============================================================ */
+/* ============================================================
+   LIQUIDACIÓN (período de pago 15 a 15, se paga a mes vencido)
+   ============================================================ */
+function getPeriodoLiquidacion(offset) {
+  const hoy = new Date();
+  let year = hoy.getFullYear();
+  let month = hoy.getMonth(); // 0-11, mes "vigente" del período que cierra el 15
+  if (hoy.getDate() < 15) { month -= 1; if (month < 0) { month = 11; year -= 1; } }
+  month += offset;
+  while (month < 0) { month += 12; year -= 1; }
+  while (month > 11) { month -= 12; year += 1; }
+
+  const finMonth = month, finYear = year; // mes vigente (donde cae el 15 de cierre)
+  let inicioMonth = month - 1, inicioYear = year; // mes pasado
+  if (inicioMonth < 0) { inicioMonth = 11; inicioYear -= 1; }
+
+  const desdeISO = `${inicioYear}-${pad(inicioMonth + 1)}-15`;
+  const hastaISO = `${finYear}-${pad(finMonth + 1)}-15`;
+
+  const pagaMonth = (finMonth + 1) % 12, pagaYear = finMonth === 11 ? finYear + 1 : finYear;
+
+  return {
+    desdeISO, hastaISO,
+    etiqueta: `15 ${MONTH_NAMES[inicioMonth]} — 15 ${MONTH_NAMES[finMonth]} ${finYear}`,
+    pagaEtiqueta: `${MONTH_NAMES[pagaMonth]} ${pagaYear}`,
+  };
+}
+
+function LiquidacionTab({ horasExtra, empleados }) {
+  const [offset, setOffset] = useState(0);
+  const [exportando, setExportando] = useState(false);
+  const cardRef = useRef(null);
+  const periodo = useMemo(() => getPeriodoLiquidacion(offset), [offset]);
+
+  const filas = useMemo(() => {
+    const map = {};
+    for (const p of PEOPLE) map[p] = { h50: 0, h100: 0 };
+    for (const h of horasExtra) {
+      if (h.fecha >= periodo.desdeISO && h.fecha <= periodo.hastaISO) {
+        if (!map[h.persona]) map[h.persona] = { h50: 0, h100: 0 };
+        if (h.tipo === "100") map[h.persona].h100 += Number(h.horas) || 0;
+        else map[h.persona].h50 += Number(h.horas) || 0;
+      }
+    }
+    return PEOPLE.map(p => ({ persona: p, ...map[p], total: map[p].h50 + map[p].h100 }));
+  }, [horasExtra, periodo]);
+
+  const totalGeneral = filas.reduce((acc, f) => ({ h50: acc.h50 + f.h50, h100: acc.h100 + f.h100 }), { h50: 0, h100: 0 });
+
+  async function capturar() {
+    if (!cardRef.current) return null;
+    return html2canvas(cardRef.current, { backgroundColor: "#0F151C", scale: 2 });
+  }
+
+  async function compartirOGuardar() {
+    setExportando(true);
+    try {
+      const canvas = await capturar();
+      if (!canvas) { setExportando(false); return; }
+      canvas.toBlob(async (blob) => {
+        if (!blob) { setExportando(false); return; }
+        const archivo = new File([blob], `liquidacion-${periodo.desdeISO}-a-${periodo.hastaISO}.png`, { type: "image/png" });
+        if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
+          try {
+            await navigator.share({ files: [archivo], title: "Liquidación de horas extra — Guardias El Bolsón" });
+            setExportando(false);
+            return;
+          } catch (e) { /* el usuario canceló o falló: cae al descargar */ }
+        }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = archivo.name; a.click();
+        URL.revokeObjectURL(url);
+        setExportando(false);
+      }, "image/png");
+    } catch (e) {
+      console.error(e);
+      setExportando(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="text-sm mb-3" style={{ color: "#9AA7B4" }}>
+        Horas extra contabilizadas por período de pago (del 15 de un mes al 15 del siguiente), que se paga a mes vencido.
+      </div>
+
+      <div className="flex items-center justify-between mb-3">
+        <button onClick={() => setOffset(o => o - 1)} className="w-8 h-8 rounded-md" style={{ background: "#161D26", border: "1px solid #2A3340" }}>‹</button>
+        <div className="text-center">
+          <div className="font-display text-base font-semibold">{periodo.etiqueta}</div>
+          <div className="text-[11px]" style={{ color: "#5C6875" }}>Se paga en la liquidación de {periodo.pagaEtiqueta}</div>
+        </div>
+        <button onClick={() => setOffset(o => o + 1)} className="w-8 h-8 rounded-md" style={{ background: "#161D26", border: "1px solid #2A3340" }}>›</button>
+      </div>
+
+      <div id="liquidacion-card" ref={cardRef} className="rounded-xl p-4" style={{ background: "#0F151C", border: "1px solid #1D2530" }}>
+        <div className="font-display text-lg font-semibold mb-0.5">Liquidación de horas extra</div>
+        <div className="text-xs mb-1" style={{ color: "#7C8A9A" }}>Guardias El Bolsón · EDERSA</div>
+        <div className="text-xs mb-4" style={{ color: "#9AA7B4" }}>Período {periodo.etiqueta} · se paga en {periodo.pagaEtiqueta}</div>
+
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr style={{ borderBottom: "1px solid #2A3340" }}>
+              <th className="text-left py-1.5" style={{ color: "#9AA7B4" }}>Persona</th>
+              <th className="text-right py-1.5" style={{ color: "#F0A83A" }}>50%</th>
+              <th className="text-right py-1.5" style={{ color: "#3EC6E0" }}>100%</th>
+              <th className="text-right py-1.5" style={{ color: "#E8EDF2" }}>Total hs</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filas.map(f => (
+              <tr key={f.persona} style={{ borderBottom: "1px solid #161D26" }}>
+                <td className="py-1.5">{f.persona}</td>
+                <td className="py-1.5 text-right font-mono">{f.h50 || "–"}</td>
+                <td className="py-1.5 text-right font-mono">{f.h100 || "–"}</td>
+                <td className="py-1.5 text-right font-mono font-semibold">{f.total || "–"}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr style={{ borderTop: "2px solid #2A3340" }}>
+              <td className="py-2 font-medium">Total equipo</td>
+              <td className="py-2 text-right font-mono font-medium">{totalGeneral.h50}</td>
+              <td className="py-2 text-right font-mono font-medium">{totalGeneral.h100}</td>
+              <td className="py-2 text-right font-mono font-semibold">{totalGeneral.h50 + totalGeneral.h100}</td>
+            </tr>
+          </tfoot>
+        </table>
+
+        <div className="text-[10px] mt-4" style={{ color: "#5C6875" }}>
+          El 50% se paga 1.5 veces el valor de tu hora normal; el 100% se paga el doble. El monto final depende del
+          valor de la hora de cada uno. Generado {fmtDateShort(toISO(new Date()))}.
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 mt-3">
+        <button onClick={() => window.print()} className="py-2.5 rounded-lg text-sm font-medium"
+          style={{ background: "#161D26", border: "1px solid #2A3340", color: "#E8EDF2" }}>
+          🖨️ Imprimir
+        </button>
+        <button onClick={compartirOGuardar} disabled={exportando} className="py-2.5 rounded-lg text-sm font-medium"
+          style={{ background: "#F0A83A", color: "#1a1206", opacity: exportando ? 0.6 : 1 }}>
+          {exportando ? "Generando…" : "📤 Compartir / Descargar imagen"}
+        </button>
+      </div>
+
+      <div className="text-[11px] mt-3" style={{ color: "#5C6875" }}>
+        Este resumen incluye a todos los compañeros sin importar la opción de "ocultar mis horas" de Banco de Hs,
+        porque es justamente para coordinar entre todos cómo queda la liquidación.
+      </div>
+    </div>
+  );
+}
+
 function ConfigTab({ empleados, updateEmpleado }) {
   return (
     <div>

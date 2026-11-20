@@ -9,3 +9,12 @@ body { margin: 0; font-family: 'Inter', system-ui, sans-serif; }
 ::-webkit-scrollbar { height: 8px; width: 8px; }
 ::-webkit-scrollbar-thumb { background: #2A3340; border-radius: 4px; }
 input, select, textarea { color-scheme: dark; }
+
+@media print {
+  body * { visibility: hidden; }
+  #liquidacion-card, #liquidacion-card * { visibility: visible; }
+  #liquidacion-card {
+    position: absolute; left: 0; top: 0; width: 100%;
+    background: #ffffff !important; color: #000000 !important; border: none !important;
+  }
+}
